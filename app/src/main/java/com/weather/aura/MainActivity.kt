@@ -24,34 +24,33 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 
-// --- مدل‌های داده API با پشتیبانی کامل از Null-Safety ---
+// --- مدل‌های داده با مدیریت امن مقادیر Null ناشی از Gson ---
 data class WeatherResponse(
     @SerializedName("current") val current: CurrentWeather? = null,
     @SerializedName("daily") val daily: DailyWeather? = null
 )
 
 data class CurrentWeather(
-    @SerializedName("temperature_2m") val temperature2m: Float? = 0f,
-    @SerializedName("relative_humidity_2m") val relativeHumidity2m: Int? = 0,
-    @SerializedName("weather_code") val weatherCode: Int? = 0,
-    @SerializedName("wind_speed_10m") val windSpeed10m: Float? = 0f
+    @SerializedName("temperature_2m") val temperature2m: Float? = null,
+    @SerializedName("relative_humidity_2m") val relativeHumidity2m: Int? = null,
+    @SerializedName("weather_code") val weatherCode: Int? = null,
+    @SerializedName("wind_speed_10m") val windSpeed10m: Float? = null
 )
 
 data class DailyWeather(
-    @SerializedName("time") val time: List<String> = emptyList(),
-    @SerializedName("temperature_2m_max") val temperature2mMax: List<Float> = emptyList(),
-    @SerializedName("temperature_2m_min") val temperature2mMin: List<Float> = emptyList(),
-    @SerializedName("precipitation_probability_max") val precipitationProbabilityMax: List<Int> = emptyList()
+    @SerializedName("time") val time: List<String>? = null,
+    @SerializedName("temperature_2m_max") val temperature2mMax: List<Float>? = null,
+    @SerializedName("temperature_2m_min") val temperature2mMin: List<Float>? = null,
+    @SerializedName("precipitation_probability_max") val precipitationProbabilityMax: List<Int>? = null
 )
 
-// اصلاح اینترفیس Retrofit
+// --- اینترفیس API هواشناسی ---
 interface WeatherApi {
     @GET("v1/forecast?current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")
     suspend fun getForecast(
@@ -60,7 +59,6 @@ interface WeatherApi {
     ): WeatherResponse
 }
 
-// کلاینت Retrofit به صورت سه‌قلوی Singleton
 object RetrofitClient {
     val api: WeatherApi by lazy {
         Retrofit.Builder()
@@ -92,27 +90,22 @@ fun MainScreen() {
     var weatherData by remember { mutableStateOf<WeatherResponse?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
+    var retryCount by remember { mutableIntStateOf(0) }
 
-    fun fetchWeather() {
-        scope.launch {
-            isLoading = true
-            errorMessage = null
-            try {
-                val data = withContext(Dispatchers.IO) {
-                    RetrofitClient.api.getForecast(lat, lon)
-                }
-                weatherData = data
-            } catch (e: Exception) {
-                errorMessage = "خطا در برقراری ارتباط با سرور: ${e.localizedMessage ?: "مشکل ناشناخته"}"
-            } finally {
-                isLoading = false
+    // فراخوانی امن و کنترل‌شده درخواست شبکه با LaunchedEffect
+    LaunchedEffect(lat, lon, retryCount) {
+        isLoading = true
+        errorMessage = null
+        try {
+            val response = withContext(Dispatchers.IO) {
+                RetrofitClient.api.getForecast(lat, lon)
             }
+            weatherData = response
+        } catch (e: Exception) {
+            errorMessage = "خطا در برقراری ارتباط با سرور: ${e.localizedMessage ?: "مشکل ناشناخته"}"
+        } finally {
+            isLoading = false
         }
-    }
-
-    LaunchedEffect(lat, lon) {
-        fetchWeather()
     }
 
     Scaffold(
@@ -160,7 +153,7 @@ fun MainScreen() {
                         lat = 36.2972
                         lon = 59.6067
                     },
-                    onRetry = { fetchWeather() }
+                    onRetry = { retryCount++ }
                 )
                 1 -> ForecastView(weatherData)
                 2 -> RadarView(lat, lon)
@@ -231,9 +224,15 @@ fun CurrentWeatherView(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ForecastView(data: WeatherResponse?) {
     var selectedDays by remember { mutableIntStateOf(3) }
+    val daily = data?.daily
+    val timeList = daily?.time ?: emptyList()
+    val maxList = daily?.temperature2mMax ?: emptyList()
+    val minList = daily?.temperature2mMin ?: emptyList()
+    val popList = daily?.precipitationProbabilityMax ?: emptyList()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("پیش‌بینی مدل ECMWF/GFS", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -251,9 +250,8 @@ fun ForecastView(data: WeatherResponse?) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        data?.daily?.let { daily ->
-            val totalAvailable = daily.time.size
-            val itemsCount = minOf(selectedDays, totalAvailable)
+        if (timeList.isNotEmpty()) {
+            val itemsCount = minOf(selectedDays, timeList.size)
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(count = itemsCount) { index ->
@@ -268,21 +266,21 @@ fun ForecastView(data: WeatherResponse?) {
                                 .fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(daily.time.getOrNull(index) ?: "", color = Color.White)
+                            Text(timeList.getOrNull(index) ?: "", color = Color.White)
                             Text(
-                                "بارش: ${daily.precipitationProbabilityMax.getOrNull(index) ?: 0}%",
+                                "بارش: ${popList.getOrNull(index) ?: 0}%",
                                 color = Color.Cyan
                             )
                             Text(
-                                "${daily.temperature2mMax.getOrNull(index) ?: 0}° / ${daily.temperature2mMin.getOrNull(index) ?: 0}°",
+                                "${maxList.getOrNull(index) ?: 0}° / ${minList.getOrNull(index) ?: 0}°",
                                 color = Color.White
                             )
                         }
                     }
                 }
             }
-        } ?: run {
-            Text("اطلاعاتی دریافت نشد.", color = Color.Gray)
+        } else {
+            Text("اطلاعاتی دریافت نشد یا در حال بارگذاری است...", color = Color.Gray)
         }
     }
 }
@@ -290,6 +288,8 @@ fun ForecastView(data: WeatherResponse?) {
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RadarView(lat: Double, lon: Double) {
+    val mapUrl = "https://www.rainviewer.com/map.html?loc=$lat,$lon,7&oFa=1&oC=1&oU=0&oCl=1"
+
     AndroidView(
         factory = { context ->
             WebView(context).apply {
@@ -298,7 +298,12 @@ fun RadarView(lat: Double, lon: Double) {
                 settings.domStorageEnabled = true
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
-                loadUrl("https://www.rainviewer.com/map.html?loc=$lat,$lon,7&oFa=1&oC=1&oU=0&oCl=1")
+                loadUrl(mapUrl)
+            }
+        },
+        update = { webView ->
+            if (webView.url != mapUrl) {
+                webView.loadUrl(mapUrl)
             }
         },
         modifier = Modifier.fillMaxSize()
