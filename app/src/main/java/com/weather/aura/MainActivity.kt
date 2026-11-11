@@ -2,13 +2,10 @@ package com.weather.aura
 
 import android.annotation.SuppressLint
 import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -42,7 +39,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.FileProvider
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
@@ -54,7 +50,6 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import retrofit2.http.Url
-import java.io.File
 
 // --- مدل‌های داده هواشناسی و ژئوکوودینگ ---
 data class WeatherResponse(
@@ -124,7 +119,6 @@ interface WeatherApi {
         @Query("format") format: String = "json"
     ): GeocodingResponse
 
-    // دانلود اطلاعات آخرین ورژن برنامه از فایل متنی/جیسون آنلاین شما
     @GET
     suspend fun checkUpdate(@Url jsonUrl: String): AppUpdateInfo
 }
@@ -151,24 +145,39 @@ class StorageManager(context: Context) {
     fun getDefaultCity(): GeoCity {
         val json = prefs.getString("default_city", null)
         return if (json != null) {
-            gson.fromJson(json, GeoCity::class.java)
+            try {
+                gson.fromJson(json, GeoCity::class.java)
+            } catch (e: Exception) {
+                fallbackCity()
+            }
         } else {
-            // شهر پیش‌فرض اولیه: تهران
-            GeoCity(name = "تهران", latitude = 35.6892, longitude = 51.3890, country = "ایران", admin1 = "Tehran")
+            fallbackCity()
         }
     }
 
+    private fun fallbackCity() = GeoCity(
+        name = "تهران",
+        latitude = 35.6892,
+        longitude = 51.3890,
+        country = "ایران",
+        admin1 = "Tehran"
+    )
+
     fun getSearchHistory(): List<GeoCity> {
         val json = prefs.getString("search_history", null) ?: return emptyList()
-        val type = object : TypeToken<List<GeoCity>>() {}.type
-        return gson.fromJson(json, type) ?: emptyList()
+        return try {
+            val type = object : TypeToken<List<GeoCity>>() {}.type
+            gson.fromJson(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     fun addToSearchHistory(city: GeoCity) {
         val history = getSearchHistory().toMutableList()
         history.removeAll { it.name == city.name && it.latitude == city.latitude }
         history.add(0, city)
-        if (history.size > 8) history.removeAt(history.lastIndex) // نگه داشتن ۸ جستجوی اخیر
+        if (history.size > 8) history.removeAt(history.lastIndex)
         prefs.edit().putString("search_history", gson.toJson(history)).apply()
     }
 
@@ -177,12 +186,12 @@ class StorageManager(context: Context) {
     }
 }
 
-// --- الگوریتم تاریخ شمسی ---
+// --- الگوریتم تبدیل تقویم میلادی به شمسی ---
 object DateHelper {
     private fun gregorianToJalali(gy: Int, gm: Int, gd: Int): Triple<Int, Int, Int> {
-        val g_d_m = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+        val gDm = intArrayOf(0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
         val gy2 = if (gm > 2) (gy + 1) else gy
-        var days = 355666 + (365 * gy) + ((gy2 + 3) / 4) - ((gy2 + 99) / 100) + ((gy2 + 399) / 400) + gd + g_d_m[gm - 1]
+        var days = 355666 + (365 * gy) + ((gy2 + 3) / 4) - ((gy2 + 99) / 100) + ((gy2 + 399) / 400) + gd + gDm[gm - 1]
         var jy = -1595 + (33 * (days / 12053))
         days %= 12053
         jy += 4 * (days / 1461)
@@ -218,7 +227,7 @@ object DateHelper {
 
             if (isJalali) {
                 val (_, jm, jd) = gregorianToJalali(y, m, d)
-                if (isFa) "$jd ${persianMonths[jm - 1]}" else "$jd/${jm}"
+                if (isFa) "$jd ${persianMonths[jm - 1]}" else "$jd/$jm"
             } else {
                 "$y/$m/$d"
             }
@@ -228,15 +237,16 @@ object DateHelper {
     }
 }
 
-// --- استایل هوشمند روز و شب و کدهای هواشناسی ---
+// --- استایل هوشمند روز و شب و آیکون‌ها ---
 object WeatherThemeHelper {
     fun getWeatherDetails(code: Int?, isDay: Boolean, isFa: Boolean): Pair<String, ImageVector> {
+        val nightClearIcon = Icons.Default.Bedtime // جایگزین آیکون بدون خطای شب
         return when (code ?: 0) {
             0 -> {
                 if (isDay) {
                     (if (isFa) "آسمان صاف و آفتابی" else "Clear Sky") to Icons.Default.WbSunny
                 } else {
-                    (if (isFa) "آسمان صاف و مهتابی" else "Clear Night") to Icons.Default.NightlightRound
+                    (if (isFa) "آسمان صاف و مهتابی" else "Clear Night") to nightClearIcon
                 }
             }
             1, 2 -> {
@@ -253,29 +263,27 @@ object WeatherThemeHelper {
             71, 73, 75, 77 -> (if (isFa) "بارش برف و سرما" else "Snow") to Icons.Default.AcUnit
             80, 81, 82 -> (if (isFa) "رگبار تند باران" else "Heavy Showers") to Icons.Default.Thunderstorm
             95, 96, 99 -> (if (isFa) "طوفان و رعد و برق" else "Thunderstorm") to Icons.Default.FlashOn
-            else -> (if (isFa) "آسمان آرام" else "Fair") to if (isDay) Icons.Default.WbSunny else Icons.Default.NightlightRound
+            else -> (if (isFa) "آسمان آرام" else "Fair") to if (isDay) Icons.Default.WbSunny else nightClearIcon
         }
     }
 
-    // پالت گرادیان پویا کاملاً هماهنگ با روز و شب
     fun getBackgroundGradient(code: Int?, isDay: Boolean): List<Color> {
         return if (isDay) {
             when (code ?: 0) {
-                0 -> listOf(Color(0xFF0284C7), Color(0xFF38BDF8), Color(0xFF0369A1)) // روز روشن و آبی
-                1, 2, 3 -> listOf(Color(0xFF475569), Color(0xFF64748B), Color(0xFF334155)) // روز ابری
-                51, 53, 55, 61, 63, 65, 80, 81, 82 -> listOf(Color(0xFF1E293B), Color(0xFF334155), Color(0xFF0284C7)) // بارانی روز
-                71, 73, 75, 77 -> listOf(Color(0xFF0284C7), Color(0xFF7DD3FC), Color(0xFFE0F2FE)) // برفی
-                95, 96, 99 -> listOf(Color(0xFF4C1D95), Color(0xFF2E1065), Color(0xFF0F172A)) // طوفانی
+                0 -> listOf(Color(0xFF0284C7), Color(0xFF38BDF8), Color(0xFF0369A1))
+                1, 2, 3 -> listOf(Color(0xFF475569), Color(0xFF64748B), Color(0xFF334155))
+                51, 53, 55, 61, 63, 65, 80, 81, 82 -> listOf(Color(0xFF1E293B), Color(0xFF334155), Color(0xFF0284C7))
+                71, 73, 75, 77 -> listOf(Color(0xFF0284C7), Color(0xFF7DD3FC), Color(0xFFE0F2FE))
+                95, 96, 99 -> listOf(Color(0xFF4C1D95), Color(0xFF2E1065), Color(0xFF0F172A))
                 else -> listOf(Color(0xFF0369A1), Color(0xFF0F172A))
             }
         } else {
-            // شب‌های دارک و عمیق
             when (code ?: 0) {
-                0 -> listOf(Color(0xFF050B14), Color(0xFF0F172A), Color(0xFF1E1B4B)) // شب صاف و پرستاره
-                1, 2, 3 -> listOf(Color(0xFF0B0F19), Color(0xFF1E293B), Color(0xFF0F172A)) // شب ابری تیره
-                51, 53, 55, 61, 63, 65, 80, 81, 82 -> listOf(Color(0xFF020617), Color(0xFF0F172A), Color(0xFF172554)) // شب بارانی
-                71, 73, 75, 77 -> listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF38BDF8)) // شب برفی
-                95, 96, 99 -> listOf(Color(0xFF2E1065), Color(0xFF0F172A), Color(0xFF020617)) // شب رعد و برق
+                0 -> listOf(Color(0xFF050B14), Color(0xFF0F172A), Color(0xFF1E1B4B))
+                1, 2, 3 -> listOf(Color(0xFF0B0F19), Color(0xFF1E293B), Color(0xFF0F172A))
+                51, 53, 55, 61, 63, 65, 80, 81, 82 -> listOf(Color(0xFF020617), Color(0xFF0F172A), Color(0xFF172554))
+                71, 73, 75, 77 -> listOf(Color(0xFF0F172A), Color(0xFF1E293B), Color(0xFF38BDF8))
+                95, 96, 99 -> listOf(Color(0xFF2E1065), Color(0xFF0F172A), Color(0xFF020617))
                 else -> listOf(Color(0xFF020617), Color(0xFF0F172A))
             }
         }
@@ -297,11 +305,9 @@ class MainActivity : ComponentActivity() {
 fun EminWeatherApp() {
     val context = LocalContext.current
     val storageManager = remember { StorageManager(context) }
-    val initialCity = remember { storageManager.getDefaultCity() }
+    var currentCity by remember { mutableStateOf(storageManager.getDefaultCity()) }
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    var currentCity by remember { mutableStateOf(initialCity) }
-
     var isPersian by remember { mutableStateOf(true) }
     var isJalali by remember { mutableStateOf(true) }
     var isFahrenheit by remember { mutableStateOf(false) }
@@ -312,22 +318,19 @@ fun EminWeatherApp() {
     var showSearchDialog by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
-    // وضعیت آپدیت
     var availableUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
-
     val coroutineScope = rememberCoroutineScope()
 
-    // تابع بررسی آپدیت آنلاین
     fun checkAppUpdate(showToastIfLatest: Boolean = false) {
         coroutineScope.launch {
             try {
-                // آدرس JSON آپدیت را می‌توانید روی گیت‌هاب یا سرور خود قرار دهید:
-                val updateUrl = "https://raw.githubusercontent.com/YourUsername/EminWeather/main/update.json"
+                // آدرس فایل JSON آپدیت برنامه روی مخزن گیت‌هاب شما
+                val updateUrl = "https://raw.githubusercontent.com/EminTm/AuraWeather/main/update.json"
                 val info = withContext(Dispatchers.IO) {
                     RetrofitClient.api.checkUpdate(updateUrl)
                 }
-                val currentVersionCode = 1 // نسخه فعلی شما در build.gradle
+                val currentVersionCode = 1
                 if (info.versionCode > currentVersionCode) {
                     availableUpdate = info
                     showUpdateDialog = true
@@ -342,7 +345,6 @@ fun EminWeatherApp() {
         }
     }
 
-    // دریافت داده‌های آب‌وهوا
     LaunchedEffect(currentCity, refreshKey) {
         isLoading = true
         errorMessage = null
@@ -358,7 +360,6 @@ fun EminWeatherApp() {
         }
     }
 
-    // تشخیص روز یا شب بودن
     val isDay = (weatherData?.current?.isDay ?: 1) == 1
     val currentCode = weatherData?.current?.weatherCode
     val targetColors = WeatherThemeHelper.getBackgroundGradient(currentCode, isDay)
@@ -372,7 +373,7 @@ fun EminWeatherApp() {
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    icon = { Icon(if (isDay) Icons.Default.WbSunny else Icons.Default.NightlightRound, null) },
+                    icon = { Icon(if (isDay) Icons.Default.WbSunny else Icons.Default.Bedtime, null) },
                     label = { Text(if (isPersian) "امروز" else "Today") }
                 )
                 NavigationBarItem(
@@ -439,7 +440,6 @@ fun EminWeatherApp() {
                 )
             }
 
-            // دیالوگ جستجو همراه با تاریخچه
             if (showSearchDialog) {
                 CitySearchDialog(
                     isPersian = isPersian,
@@ -453,7 +453,6 @@ fun EminWeatherApp() {
                 )
             }
 
-            // دیالوگ آپدیت درون‌برنامه‌ای
             if (showUpdateDialog && availableUpdate != null) {
                 UpdateDialog(
                     update = availableUpdate!!,
@@ -469,7 +468,7 @@ fun EminWeatherApp() {
     }
 }
 
-// --- صفحه اصلی نمایش آب‌وهوا ---
+// --- صفحه آب و هوای امروز ---
 @Composable
 fun CurrentWeatherScreen(
     city: GeoCity,
@@ -495,7 +494,6 @@ fun CurrentWeatherScreen(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // نوار جستجو و نام شهر
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -563,7 +561,6 @@ fun CurrentWeatherScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // کارت اطلاعات باد، رطوبت، فشار و حس واقعی
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0x2AFFFFFF)),
                     shape = RoundedCornerShape(16.dp),
@@ -582,7 +579,6 @@ fun CurrentWeatherScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // پیش‌بینی ۲۴ ساعته
                 Text(
                     text = if (isPersian) "پیش‌بینی ساعتی" else "Hourly Forecast",
                     fontSize = 18.sp,
@@ -647,7 +643,7 @@ fun InfoItem(icon: ImageVector, label: String, value: String) {
     }
 }
 
-// --- صفحه پیش‌بینی چند روزه ---
+// --- صفحه پیش‌بینی روزهای آینده ---
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ForecastScreen(
@@ -734,7 +730,7 @@ fun ForecastScreen(
     }
 }
 
-// --- صفحه رادار هواشناسی ---
+// --- صفحه رادار زنده ماهواره‌ای ---
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun LiveRadarScreen(lat: Double, lon: Double, isPersian: Boolean) {
@@ -818,7 +814,7 @@ fun LiveRadarScreen(lat: Double, lon: Double, isPersian: Boolean) {
     }
 }
 
-// --- دیالوگ جستجو همراه با تاریخچه هوشمند ---
+// --- دیالوگ جستجوی شهرها همراه با تاریخچه ---
 @Composable
 fun CitySearchDialog(
     isPersian: Boolean,
@@ -899,7 +895,7 @@ fun CitySearchDialog(
                                 Text(city.name, color = Color.White, fontWeight = FontWeight.Bold)
                                 Text("${city.admin1 ?: ""}, ${city.country ?: ""}", color = Color.Gray, fontSize = 12.sp)
                             }
-                            Divider(color = Color(0x22FFFFFF))
+                            HorizontalDivider(color = Color(0x22FFFFFF))
                         }
                     }
                 } else if (history.isNotEmpty()) {
@@ -909,7 +905,7 @@ fun CitySearchDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            if (isPersian) "تاریخچه جستجوهای اخیر:" else "Recent Searches:",
+                            if (isPersian) "تاریخچه جستجوها:" else "Recent Searches:",
                             color = Color.LightGray,
                             fontSize = 13.sp
                         )
@@ -936,9 +932,9 @@ fun CitySearchDialog(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(oldCity.name, color = Color.White)
                                 }
-                                Text("${oldCity.country ?: ""}", color = Color.Gray, fontSize = 12.sp)
+                                Text(oldCity.country ?: "", color = Color.Gray, fontSize = 12.sp)
                             }
-                            Divider(color = Color(0x15FFFFFF))
+                            HorizontalDivider(color = Color(0x15FFFFFF))
                         }
                     }
                 }
@@ -952,7 +948,7 @@ fun CitySearchDialog(
     )
 }
 
-// --- دیالوگ دانلود و نصب آپدیت درون‌برنامه‌ای ---
+// --- دیالوگ اطلاع‌رسانی نسخه جدید ---
 @Composable
 fun UpdateDialog(
     update: AppUpdateInfo,
@@ -1001,57 +997,32 @@ fun UpdateDialog(
     )
 }
 
-// تابع دانلود و نصب مستقیم فایل APK درون اندروید
+// متد امن دانلود با مرورگر یا DownloadManager (بدون نیاز به تنظیمات پیچیده پرمیشن در اندروید ۱۴)
 fun downloadAndInstallApk(context: Context, apkUrl: String) {
     try {
-        val downloadUri = Uri.parse(apkUrl)
-        val request = DownloadManager.Request(downloadUri).apply {
-            setTitle("Emin Weather Update")
-            setDescription("در حال دریافت نسخه جدید برنامه...")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalFilesDir(context, null, "update.apk")
-            setMimeType("application/vnd.android.package-archive")
+        if (apkUrl.isBlank()) return
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-
-        val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = manager.enqueue(request)
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) {
-                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-                if (id == downloadId) {
-                    val file = File(context.getExternalFilesDir(null), "update.apk")
-                    if (file.exists()) {
-                        val apkUri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.provider",
-                            file
-                        )
-                        val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(apkUri, "application/vnd.android.package-archive")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        context.startActivity(installIntent)
-                    }
-                    context.unregisterReceiver(this)
-                }
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
-        }
-
-        Toast.makeText(context, "در حال دانلود فایل آپدیت...", Toast.LENGTH_SHORT).show()
+        context.startActivity(intent)
     } catch (e: Exception) {
-        Toast.makeText(context, "خطا در دانلود آپدیت: ${e.message}", Toast.LENGTH_LONG).show()
+        try {
+            val downloadUri = Uri.parse(apkUrl)
+            val request = DownloadManager.Request(downloadUri).apply {
+                setTitle("Emin Weather Update")
+                setDescription("Downloading new version...")
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            }
+            val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            manager.enqueue(request)
+            Toast.makeText(context, "در حال دانلود آپدیت...", Toast.LENGTH_SHORT).show()
+        } catch (err: Exception) {
+            Toast.makeText(context, "خطا در دانلود: ${err.message}", Toast.LENGTH_LONG).show()
+        }
     }
 }
 
-// --- صفحه تنظیمات کامل با قابلیت انتخاب شهر پیش‌فرض و بررسی آپدیت ---
+// --- صفحه تنظیمات کامل ---
 @Composable
 fun SettingsScreen(
     isPersian: Boolean,
@@ -1079,7 +1050,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // دکمه تنظیم شهر فعلی به عنوان شهر پیش‌فرض
+        // ثبت شهر پیش‌فرض
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0x33FFFFFF)),
             shape = RoundedCornerShape(14.dp),
@@ -1102,7 +1073,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // زبان
+        // تغییر زبان
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0x33FFFFFF)),
             shape = RoundedCornerShape(14.dp),
@@ -1125,7 +1096,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // نوع تقویم
+        // گاه‌شمار
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0x33FFFFFF)),
             shape = RoundedCornerShape(14.dp),
@@ -1171,7 +1142,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // دکمه بررسی آپدیت برنامه
+        // دکمه بررسی آپدیت آنلاین
         OutlinedButton(
             onClick = onCheckUpdate,
             modifier = Modifier.fillMaxWidth()
@@ -1183,7 +1154,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // دکمه تازه‌سازی دستی
+        // دکمه ریفرش
         Button(
             onClick = onRefresh,
             modifier = Modifier.fillMaxWidth(),
