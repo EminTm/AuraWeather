@@ -24,54 +24,52 @@ jobs:
         with:
           gradle-version: 8.6
 
-      - name: Prepare Project Files
+      - name: Prepare Clean Manifest & Resources
         run: |
-          # در صورتی که فایل‌ها داخل پوشه AuraWeather-main باشند به صفحه اصلی منتقل می‌شوند
+          # در صورت وجود پوشه تو در تو فایل‌ها جابجا می‌شوند
           if [ -d "AuraWeather-main" ]; then
             shopt -s dotglob nullglob
             mv AuraWeather-main/* . 2>/dev/null || true
           fi
 
-          # ساخت خودکار مانیفست در صورت عدم وجود
-          mkdir -p app/src/main
-          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            printf '%s\n' \
-              '<?xml version="1.0" encoding="utf-8"?>' \
-              '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' \
-              '    <uses-permission android:name="android.permission.INTERNET" />' \
-              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' \
-              '    <application' \
-              '        android:allowBackup="true"' \
-              '        android:label="AuraWeather"' \
-              '        android:supportsRtl="true"' \
-              '        android:theme="@android:style/Theme.Material.NoActionBar">' \
-              '        <activity' \
-              '            android:name=".MainActivity"' \
-              '            android:exported="true">' \
-              '            <intent-filter>' \
-              '                <action android:name="android.intent.action.MAIN" />' \
-              '                <category android:name="android.intent.category.LAUNCHER" />' \
-              '            </intent-filter>' \
-              '        </activity>' \
-              '    </application>' \
-              '</manifest>' > app/src/main/AndroidManifest.xml
-          fi
+          # ساخت پوشه‌های ضروری
+          mkdir -p app/src/main/res/values
 
-          # ساخت gradle.properties در صورت عدم وجود
-          if [ ! -f "gradle.properties" ]; then
-            printf '%s\n' \
-              'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
-              'android.useAndroidX=true' \
-              'android.nonTransitiveRClass=true' > gradle.properties
-          fi
+          # ساخت فایل مانیفست تمیز و بدون ارور (جایگزین کردن فایل قبلی)
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="utf-8"?>' \
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' \
+            '    <uses-permission android:name="android.permission.INTERNET" />' \
+            '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' \
+            '    <application' \
+            '        android:allowBackup="true"' \
+            '        android:label="AuraWeather"' \
+            '        android:supportsRtl="true"' \
+            '        android:theme="@android:style/Theme.Material.NoActionBar">' \
+            '        <activity' \
+            '            android:name="com.weather.aura.MainActivity"' \
+            '            android:exported="true">' \
+            '            <intent-filter>' \
+            '                <action android:name="android.intent.action.MAIN" />' \
+            '                <category android:name="android.intent.category.LAUNCHER" />' \
+            '            </intent-filter>' \
+            '        </activity>' \
+            '    </application>' \
+            '</manifest>' > app/src/main/AndroidManifest.xml
+
+          # ایجاد تنظیمات گریدل
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
+            'android.useAndroidX=true' \
+            'android.nonTransitiveRClass=true' > gradle.properties
 
       - name: Build Debug APK
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleDebug --no-daemon --stacktrace
           else
-            gradle assembleDebug --no-daemon
+            gradle assembleDebug --no-daemon --stacktrace
           fi
 
       - name: Upload APK Artifact
