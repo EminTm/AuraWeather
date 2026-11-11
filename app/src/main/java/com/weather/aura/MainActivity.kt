@@ -9,7 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -32,27 +31,27 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 
-// --- مدل‌های داده API ---
+// --- مدل‌های داده API با پشتیبانی کامل از Null-Safety ---
 data class WeatherResponse(
-    @SerializedName("current") val current: CurrentWeather?,
-    @SerializedName("daily") val daily: DailyWeather?
+    @SerializedName("current") val current: CurrentWeather? = null,
+    @SerializedName("daily") val daily: DailyWeather? = null
 )
 
 data class CurrentWeather(
-    @SerializedName("temperature_2m") val temperature2m: Float,
-    @SerializedName("relative_humidity_2m") val relativeHumidity2m: Int,
-    @SerializedName("weather_code") val weatherCode: Int,
-    @SerializedName("wind_speed_10m") val windSpeed10m: Float
+    @SerializedName("temperature_2m") val temperature2m: Float? = 0f,
+    @SerializedName("relative_humidity_2m") val relativeHumidity2m: Int? = 0,
+    @SerializedName("weather_code") val weatherCode: Int? = 0,
+    @SerializedName("wind_speed_10m") val windSpeed10m: Float? = 0f
 )
 
 data class DailyWeather(
-    @SerializedName("time") val time: List<String>,
-    @SerializedName("temperature_2m_max") val temperature2mMax: List<Float>,
-    @SerializedName("temperature_2m_min") val temperature2mMin: List<Float>,
-    @SerializedName("precipitation_probability_max") val precipitationProbabilityMax: List<Int>
+    @SerializedName("time") val time: List<String> = emptyList(),
+    @SerializedName("temperature_2m_max") val temperature2mMax: List<Float> = emptyList(),
+    @SerializedName("temperature_2m_min") val temperature2mMin: List<Float> = emptyList(),
+    @SerializedName("precipitation_probability_max") val precipitationProbabilityMax: List<Int> = emptyList()
 )
 
-// اصلاح اینترفیس برای جلوگیری از باگ Default Arguments در Retrofit
+// اصلاح اینترفیس Retrofit
 interface WeatherApi {
     @GET("v1/forecast?current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")
     suspend fun getForecast(
@@ -61,7 +60,7 @@ interface WeatherApi {
     ): WeatherResponse
 }
 
-// ساخت نمونه کلاینت Retrofit به صورت Singleton
+// کلاینت Retrofit به صورت سه‌قلوی Singleton
 object RetrofitClient {
     val api: WeatherApi by lazy {
         Retrofit.Builder()
@@ -105,7 +104,7 @@ fun MainScreen() {
                 }
                 weatherData = data
             } catch (e: Exception) {
-                errorMessage = "خطا در برقراری ارتباط با سرور: ${e.localizedMessage}"
+                errorMessage = "خطا در برقراری ارتباط با سرور: ${e.localizedMessage ?: "مشکل ناشناخته"}"
             } finally {
                 isLoading = false
             }
@@ -211,15 +210,19 @@ fun CurrentWeatherView(
             }
             data?.current != null -> {
                 val current = data.current
+                val tempText = current.temperature2m?.let { "${it.toInt()}°C" } ?: "--°C"
+                val humidity = current.relativeHumidity2m ?: 0
+                val windSpeed = current.windSpeed10m ?: 0f
+
                 Text(
-                    text = "${current.temperature2m.toInt()}°C",
+                    text = tempText,
                     fontSize = 72.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = Color.White
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
-                    text = "رطوبت: ${current.relativeHumidity2m}% | باد: ${current.windSpeed10m} km/h",
+                    text = "رطوبت: $humidity% | باد: $windSpeed km/h",
                     color = Color.LightGray,
                     fontSize = 16.sp
                 )
