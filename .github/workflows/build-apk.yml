@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: # این بخش به شما اجازه می‌دهد هر زمان خواستید دستی با زدن یک دکمه بیلد را شروع کنید
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,20 +18,22 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # استفاده از ابزار رسمی گریدل با نسخه هماهنگ 8.6
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.6
 
-      - name: Ensure Gradle Wrapper Exists
-        run: |
-          if [ ! -f "gradlew" ]; then
-            gradle wrapper
-          fi
-          chmod +x gradlew
-
+      # اگر فایل gradlew در پروژه نباشد، مستقیماً با خود گریدل بیلد می‌کند
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
