@@ -19,20 +19,56 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # استفاده از ابزار رسمی گریدل با نسخه هماهنگ 8.6
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.6
 
-      # اگر فایل gradlew در پروژه نباشد، مستقیماً با خود گریدل بیلد می‌کند
+      # اگر فایل‌ها تصادفاً داخل پوشه AuraWeather-main باشند، این بخش آنها را جابجا می‌کند
+      - name: Auto Fix Directory Structure
+        run: |
+          if [ -d "AuraWeather-main" ]; then
+            echo "Moving files from nested folder to root..."
+            mv AuraWeather-main/* . || true
+            mv AuraWeather-main/.* . 2>/dev/null || true
+          fi
+
+      # اگر مانیفست فراموش شده باشد، آن را خودکار می‌سازد تا بیلد شکست نخورد
+      - name: Ensure AndroidManifest Exists
+        run: |
+          mkdir -p app/src/main
+          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
+            echo "Creating missing AndroidManifest.xml..."
+            cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <application
+                  android:allowBackup="true"
+                  android:label="AuraWeather"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          fi
+
       - name: Build Debug APK
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace
+            ./gradlew assembleDebug --no-daemon
           else
-            gradle assembleDebug --no-daemon --stacktrace
+            gradle assembleDebug --no-daemon
           fi
 
       - name: Upload APK Artifact
