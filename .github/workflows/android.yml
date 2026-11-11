@@ -24,52 +24,50 @@ jobs:
         with:
           gradle-version: 8.6
 
-      - name: Prepare Clean Manifest & Resources
+      - name: Prepare Clean Manifest & Config
         run: |
-          # در صورت وجود پوشه تو در تو فایل‌ها جابجا می‌شوند
+          # اگر پوشه AuraWeather-main وجود دارد فایل‌ها جابجا شوند
           if [ -d "AuraWeather-main" ]; then
             shopt -s dotglob nullglob
             mv AuraWeather-main/* . 2>/dev/null || true
           fi
 
-          # ساخت پوشه‌های ضروری
-          mkdir -p app/src/main/res/values
+          # ساخت مطمئن و خط‌به‌خط AndroidManifest.xml بدون خطای سینتکس
+          mkdir -p app/src/main
+          rm -f app/src/main/AndroidManifest.xml
+          echo '<?xml version="1.0" encoding="utf-8"?>' > app/src/main/AndroidManifest.xml
+          echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' >> app/src/main/AndroidManifest.xml
+          echo '    <uses-permission android:name="android.permission.INTERNET" />' >> app/src/main/AndroidManifest.xml
+          echo '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' >> app/src/main/AndroidManifest.xml
+          echo '    <application' >> app/src/main/AndroidManifest.xml
+          echo '        android:allowBackup="true"' >> app/src/main/AndroidManifest.xml
+          echo '        android:label="AuraWeather"' >> app/src/main/AndroidManifest.xml
+          echo '        android:supportsRtl="true"' >> app/src/main/AndroidManifest.xml
+          echo '        android:theme="@android:style/Theme.Material.NoActionBar">' >> app/src/main/AndroidManifest.xml
+          echo '        <activity' >> app/src/main/AndroidManifest.xml
+          echo '            android:name=".MainActivity"' >> app/src/main/AndroidManifest.xml
+          echo '            android:exported="true">' >> app/src/main/AndroidManifest.xml
+          echo '            <intent-filter>' >> app/src/main/AndroidManifest.xml
+          echo '                <action android:name="android.intent.action.MAIN" />' >> app/src/main/AndroidManifest.xml
+          echo '                <category android:name="android.intent.category.LAUNCHER" />' >> app/src/main/AndroidManifest.xml
+          echo '            </intent-filter>' >> app/src/main/AndroidManifest.xml
+          echo '        </activity>' >> app/src/main/AndroidManifest.xml
+          echo '    </application>' >> app/src/main/AndroidManifest.xml
+          echo '</manifest>' >> app/src/main/AndroidManifest.xml
 
-          # ساخت فایل مانیفست تمیز و بدون ارور (جایگزین کردن فایل قبلی)
-          printf '%s\n' \
-            '<?xml version="1.0" encoding="utf-8"?>' \
-            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' \
-            '    <uses-permission android:name="android.permission.INTERNET" />' \
-            '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' \
-            '    <application' \
-            '        android:allowBackup="true"' \
-            '        android:label="AuraWeather"' \
-            '        android:supportsRtl="true"' \
-            '        android:theme="@android:style/Theme.Material.NoActionBar">' \
-            '        <activity' \
-            '            android:name="com.weather.aura.MainActivity"' \
-            '            android:exported="true">' \
-            '            <intent-filter>' \
-            '                <action android:name="android.intent.action.MAIN" />' \
-            '                <category android:name="android.intent.category.LAUNCHER" />' \
-            '            </intent-filter>' \
-            '        </activity>' \
-            '    </application>' \
-            '</manifest>' > app/src/main/AndroidManifest.xml
-
-          # ایجاد تنظیمات گریدل
-          printf '%s\n' \
-            'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' \
-            'android.useAndroidX=true' \
-            'android.nonTransitiveRClass=true' > gradle.properties
+          # اطمینان از تنظیمات گریدل
+          rm -f gradle.properties
+          echo 'org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8' > gradle.properties
+          echo 'android.useAndroidX=true' >> gradle.properties
+          echo 'android.nonTransitiveRClass=true' >> gradle.properties
 
       - name: Build Debug APK
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace
+            ./gradlew assembleDebug --no-daemon
           else
-            gradle assembleDebug --no-daemon --stacktrace
+            gradle assembleDebug --no-daemon
           fi
 
       - name: Upload APK Artifact
