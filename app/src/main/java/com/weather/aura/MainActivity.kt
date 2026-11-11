@@ -1,5 +1,6 @@
 package com.weather.aura
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -8,7 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -31,36 +32,44 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 
-// --- مدل‌های داده API با دقت بالا (Open-Meteo) ---
+// --- مدل‌های داده API ---
 data class WeatherResponse(
-    val current: CurrentWeather?,
-    val daily: DailyWeather?
+    @SerializedName("current") val current: CurrentWeather?,
+    @SerializedName("daily") val daily: DailyWeather?
 )
 
 data class CurrentWeather(
-    val temperature_2m: Float,
-    val relative_humidity_2m: Int,
-    val weather_code: Int,
-    val wind_speed_10m: Float
+    @SerializedName("temperature_2m") val temperature2m: Float,
+    @SerializedName("relative_humidity_2m") val relativeHumidity2m: Int,
+    @SerializedName("weather_code") val weatherCode: Int,
+    @SerializedName("wind_speed_10m") val windSpeed10m: Float
 )
 
 data class DailyWeather(
-    val time: List<String>,
-    val temperature_2m_max: List<Float>,
-    val temperature_2m_min: List<Float>,
-    val precipitation_probability_max: List<Int>
+    @SerializedName("time") val time: List<String>,
+    @SerializedName("temperature_2m_max") val temperature2mMax: List<Float>,
+    @SerializedName("temperature_2m_min") val temperature2mMin: List<Float>,
+    @SerializedName("precipitation_probability_max") val precipitationProbabilityMax: List<Int>
 )
 
+// اصلاح اینترفیس برای جلوگیری از باگ Default Arguments در Retrofit
 interface WeatherApi {
-    @GET("v1/forecast")
+    @GET("v1/forecast?current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")
     suspend fun getForecast(
         @Query("latitude") lat: Double,
-        @Query("longitude") lon: Double,
-        @Query("current") current: String = "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
-        @Query("daily") daily: String = "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-        @Query("forecast_days") days: Int = 10,
-        @Query("timezone") timezone: String = "auto"
+        @Query("longitude") lon: Double
     ): WeatherResponse
+}
+
+// ساخت نمونه کلاینت Retrofit به صورت Singleton
+object RetrofitClient {
+    val api: WeatherApi by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://api.open-meteo.com/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(WeatherApi::class.java)
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -74,32 +83,31 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
-    var selectedTab by remember { mutableStateOf(0) }
-    var cityName by remember { mutableStateOf("Tehran") }
-    var lat by remember { mutableStateOf(35.6892) }
-    var lon by remember { mutableStateOf(51.3890) }
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var cityName by remember { mutableStateOf("تهران") }
+    var lat by remember { mutableDoubleStateOf(35.6892) }
+    var lon by remember { mutableDoubleStateOf(51.3890) }
+
     var weatherData by remember { mutableStateOf<WeatherResponse?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    val api = remember {
-        Retrofit.Builder()
-            .baseUrl("https://api.open-meteo.com/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(WeatherApi::class.java)
-    }
-
-    // لود داده‌ها
     fun fetchWeather() {
         scope.launch {
+            isLoading = true
+            errorMessage = null
             try {
-                val data = withContext(Dispatchers.IO) { api.getForecast(lat, lon) }
+                val data = withContext(Dispatchers.IO) {
+                    RetrofitClient.api.getForecast(lat, lon)
+                }
                 weatherData = data
             } catch (e: Exception) {
-                e.printStackTrace()
+                errorMessage = "خطا در برقراری ارتباط با سرور: ${e.localizedMessage}"
+            } finally {
+                isLoading = false
             }
         }
     }
@@ -143,12 +151,18 @@ fun MainScreen() {
                 )
         ) {
             when (selectedTab) {
-                0 -> CurrentWeatherView(cityName, weatherData) {
-                    // تغییر نمونه شهر به مشهد برای تست سرچ
-                    cityName = "Mashhad"
-                    lat = 36.2972
-                    lon = 59.6067
-                }
+                0 -> CurrentWeatherView(
+                    cityName = cityName,
+                    data = weatherData,
+                    isLoading = isLoading,
+                    errorMessage = errorMessage,
+                    onSearchClick = {
+                        cityName = "مشهد"
+                        lat = 36.2972
+                        lon = 59.6067
+                    },
+                    onRetry = { fetchWeather() }
+                )
                 1 -> ForecastView(weatherData)
                 2 -> RadarView(lat, lon)
             }
@@ -156,9 +170,15 @@ fun MainScreen() {
     }
 }
 
-// ۱. نمای وضعیت آب‌وهوای فعلی
 @Composable
-fun CurrentWeatherView(cityName: String, data: WeatherResponse?, onSearchClick: () -> Unit) {
+fun CurrentWeatherView(
+    cityName: String,
+    data: WeatherResponse?,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onSearchClick: () -> Unit,
+    onRetry: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -176,19 +196,41 @@ fun CurrentWeatherView(cityName: String, data: WeatherResponse?, onSearchClick: 
             }
         }
 
-        Spacer(modifier = Modifier.height(50.dp))
+        Spacer(modifier = Modifier.height(60.dp))
 
-        data?.current?.let { current ->
-            Text(text = "${current.temperature_2m.toInt()}°C", fontSize = 72.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-            Text(text = "رطوبت: ${current.relative_humidity_2m}% | باد: ${current.wind_speed_10m} km/h", color = Color.LightGray, fontSize = 16.sp)
-        } ?: CircularProgressIndicator(color = Color.Cyan)
+        when {
+            isLoading -> {
+                CircularProgressIndicator(color = Color.Cyan)
+            }
+            errorMessage != null -> {
+                Text(text = errorMessage, color = Color.Red, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(onClick = onRetry) {
+                    Text("تلاش مجدد")
+                }
+            }
+            data?.current != null -> {
+                val current = data.current
+                Text(
+                    text = "${current.temperature2m.toInt()}°C",
+                    fontSize = 72.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "رطوبت: ${current.relativeHumidity2m}% | باد: ${current.windSpeed10m} km/h",
+                    color = Color.LightGray,
+                    fontSize = 16.sp
+                )
+            }
+        }
     }
 }
 
-// ۲. نمای پیش‌بینی ۳، ۷ و ۱۰ روزه
 @Composable
 fun ForecastView(data: WeatherResponse?) {
-    var selectedDays by remember { mutableStateOf(3) }
+    var selectedDays by remember { mutableIntStateOf(3) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("پیش‌بینی مدل ECMWF/GFS", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
@@ -207,29 +249,42 @@ fun ForecastView(data: WeatherResponse?) {
         Spacer(modifier = Modifier.height(16.dp))
 
         data?.daily?.let { daily ->
+            val totalAvailable = daily.time.size
+            val itemsCount = minOf(selectedDays, totalAvailable)
+
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(selectedDays) { index ->
+                items(count = itemsCount) { index ->
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0x33FFFFFF)),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(daily.time.getOrNull(index) ?: "", color = Color.White)
-                            Text("بارش: ${daily.precipitation_probability_max.getOrNull(index) ?: 0}%", color = Color.Cyan)
-                            Text("${daily.temperature_2m_max.getOrNull(index) ?: 0}° / ${daily.temperature_2m_min.getOrNull(index) ?: 0}°", color = Color.White)
+                            Text(
+                                "بارش: ${daily.precipitationProbabilityMax.getOrNull(index) ?: 0}%",
+                                color = Color.Cyan
+                            )
+                            Text(
+                                "${daily.temperature2mMax.getOrNull(index) ?: 0}° / ${daily.temperature2mMin.getOrNull(index) ?: 0}°",
+                                color = Color.White
+                            )
                         }
                     }
                 }
             }
+        } ?: run {
+            Text("اطلاعاتی دریافت نشد.", color = Color.Gray)
         }
     }
 }
 
-// ۳. نمای رادار زنده ماهواره‌ای بارش
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun RadarView(lat: Double, lon: Double) {
     AndroidView(
@@ -237,7 +292,9 @@ fun RadarView(lat: Double, lon: Double) {
             WebView(context).apply {
                 webViewClient = WebViewClient()
                 settings.javaScriptEnabled = true
-                // نقشه راداری زنده RainViewer
+                settings.domStorageEnabled = true
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
                 loadUrl("https://www.rainviewer.com/map.html?loc=$lat,$lon,7&oFa=1&oC=1&oU=0&oCl=1")
             }
         },
